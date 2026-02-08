@@ -1,51 +1,70 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const versionSelect = document.getElementById('version-select');
-    const createServerBtn = document.getElementById('create-server-btn');
-    const logOutput = document.getElementById('log-output');
+document.addEventListener('DOMContentLoaded', function() {
+    const socket = io();
 
-    const MINECRAFT_VERSION_MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest.json';
+    const versionSelector = document.getElementById('server-version');
+    const consoleOutput = document.getElementById('console-output');
 
-    async function fetchMinecraftVersions() {
-        try {
-            const response = await fetch(MINECRAFT_VERSION_MANIFEST_URL);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const data = await response.json();
-            
-            versionSelect.innerHTML = '<option value="">Selecione uma versão</option>'; // Clear loading text
+    // Fetch Minecraft versions from Mojang API
+    fetch('https://launchermeta.mojang.com/mc/game/version_manifest.json')
+        .then(response => response.json())
+        .then(data => {
+            const versions = data.versions.filter(v => v.type === 'release');
+            versions.forEach(version => {
+                const option = document.createElement('option');
+                option.value = version.id;
+                option.textContent = version.id;
+                versionSelector.appendChild(option);
+            });
+        })
+        .catch(error => {
+            console.error('Error fetching Minecraft versions:', error);
+            const option = document.createElement('option');
+            option.textContent = 'Error loading versions';
+            versionSelector.appendChild(option);
+        });
 
-            // Filter for release versions and add them to the select dropdown
-            data.versions
-                .filter(version => version.type === 'release')
-                .forEach(version => {
-                    const option = document.createElement('option');
-                    option.value = version.id;
-                    option.textContent = version.id;
-                    versionSelect.appendChild(option);
-                });
+    const startServerButton = document.getElementById('startServer');
+    const stopServerButton = document.getElementById('stopServer');
+    const restartServerButton = document.getElementById('restartServer');
 
-        } catch (error) {
-            console.error('Failed to fetch Minecraft versions:', error);
-            versionSelect.innerHTML = '<option value="">Erro ao carregar versões</option>';
-            logOutput.textContent = `Erro ao buscar versões: ${error.message}`;
-        }
-    }
-
-    createServerBtn.addEventListener('click', () => {
-        const selectedVersion = versionSelect.value;
-        if (!selectedVersion) {
-            logOutput.textContent = 'Por favor, selecione uma versão do Minecraft antes de criar o servidor.';
-            return;
-        }
-
-        logOutput.textContent = `Iniciando a criação do servidor para a versão: ${selectedVersion}...`;
-        
-        // A lógica para criar o servidor será tratada pelo assistente de IA
-        // que irá interceptar esta ação e executar os comandos necessários no terminal.
-        console.log(`AI_ACTION: CREATE_MINECRAFT_SERVER, VERSION: ${selectedVersion}`);
+    startServerButton.addEventListener('click', () => {
+        const serverType = document.getElementById('server-type').value;
+        const serverVersion = document.getElementById('server-version').value;
+        socket.emit('start-server', { serverType, serverVersion });
     });
 
-    // Initial fetch of versions
-    fetchMinecraftVersions();
+    stopServerButton.addEventListener('click', () => {
+        socket.emit('stop-server');
+    });
+
+    restartServerButton.addEventListener('click', () => {
+        // For restart, we can just send a stop and then a start command
+        // The backend could also implement a specific restart logic
+        socket.emit('stop-server');
+        // A delay might be needed here depending on how fast the server stops
+        setTimeout(() => {
+            const serverType = document.getElementById('server-type').value;
+            const serverVersion = document.getElementById('server-version').value;
+            socket.emit('start-server', { serverType, serverVersion });
+        }, 5000); // 5-second delay before starting again
+    });
+
+    socket.on('console-output', (data) => {
+        consoleOutput.innerHTML += data.replace(/\n/g, '<br>'); // Sanitize and format
+        consoleOutput.scrollTop = consoleOutput.scrollHeight; // Scroll to bottom
+    });
 });
+
+function openTab(evt, tabName) {
+    var i, tabcontent, tablinks;
+    tabcontent = document.getElementsByClassName("tab-content");
+    for (i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].style.display = "none";
+    }
+    tablinks = document.getElementsByClassName("tab-link");
+    for (i = 0; i < tablinks.length; i++) {
+        tablinks[i].className = tablinks[i].className.replace(" active", "");
+    }
+    document.getElementById(tabName).style.display = "block";
+    evt.currentTarget.className += " active";
+}

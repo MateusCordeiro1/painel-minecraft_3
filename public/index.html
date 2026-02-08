@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Controle Minecraft</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Inter:wght@400;700&display=swap');
+
+        :root {
+            --background-dark: #121212;
+            --background-light: #1E1E1E;
+            --text-primary: #E0E0E0;
+            --text-secondary: #B0B0B0;
+            --border-color: #333;
+            --accent-green: #4DB6AC;
+            --accent-yellow: #FFB74D;
+            --accent-red: #E57373;
+            --accent-blue: #64B5F6;
+            --accent-green-dark: #121212;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--background-dark);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1, h2 {
+            text-align: center;
+            text-shadow: 0 0 10px rgba(77, 182, 172, 0.5);
+        }
+
+        .section {
+            background-color: var(--background-light);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            width: 100%;
+            max-width: 800px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+        }
+
+        #controls, #server-management, #create-form-controls {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .control-button, .form-button, .ip-copy-button {
+            font-family: 'Inter', sans-serif;
+            font-size: 1rem;
+            font-weight: 700;
+            padding: 0.7rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .form-input, .form-select {
+            font-family: 'Inter', sans-serif;
+            font-size: 1rem;
+            padding: 0.7rem;
+            border-radius: 8px;
+            border: 1px solid #555;
+            background-color: #2c2c2c;
+            color: var(--text-primary);
+        }
+
+        #startButton { background: var(--accent-green); color: var(--accent-green-dark); }
+        #startButton:hover { background: #26A69A; }
+        #restartButton { background: var(--accent-yellow); color: var(--accent-green-dark); }
+        #restartButton:hover { background: #FFA726; }
+        #stopButton { background: var(--accent-red); color: var(--accent-green-dark); }
+        #stopButton:hover { background: #EF5350; }
+        #deleteServerBtn { background: #b33939; color: white; }
+        #deleteServerBtn:hover { background: #c84444; }
+        #createServerBtn { background: #81C784; color: var(--accent-green-dark); }
+        #createServerBtn:hover { background: #66BB6A; }
+
+        .control-button:disabled { background: #455A64; cursor: not-allowed; box-shadow: none; transform: none; }
+
+        #terminal, #creationStatus {
+            width: 100%;
+            height: 400px;
+            background-color: #1A1A1A;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1rem;
+            overflow-y: scroll;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Roboto Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        
+        #creationStatus { height: 150px; color: #81C784; }
+
+        #server-ip-section {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            background-color: #2c2c2c;
+            padding: 10px 15px;
+            border-radius: 8px;
+        }
+        #serverIp { font-family: 'Roboto Mono', monospace; font-size: 1.1rem; color: var(--accent-green); }
+        .ip-copy-button { font-size: 0.8rem; padding: 5px 10px; background-color: var(--accent-blue); color: var(--accent-green-dark); }
+
+    </style>
+</head>
+<body>
+    <h1>Painel de Controle Minecraft</h1>
+
+    <!-- Seção de Gerenciamento de Servidores -->
+    <div class="section">
+        <h2>Gerenciar Servidores</h2>
+        <div id="server-management">
+            <select id="serverSelector" class="form-select" title="Selecione um servidor existente"></select>
+            <button id="deleteServerBtn" class="control-button">🗑️ Deletar</button>
+        </div>
+        <hr style="border-color: #444; margin: 1.5rem 0;">
+        <form id="createServerForm">
+            <h3>Criar Novo Servidor</h3>
+            <div id="create-form-controls">
+                <select id="versionSelector" class="form-select" required title="Selecione a versão do Minecraft">
+                    <option value="">Carregando versões...</option>
+                </select>
+                <input type="text" id="serverNameInput" class="form-input" placeholder="Nome do servidor (ex: survival-1.21)" required>
+                <button type="submit" id="createServerBtn" class="form-button">✓ Criar Servidor</button>
+            </div>
+        </form>
+        <pre id="creationStatus">Logs da criação do servidor aparecerão aqui...</pre>
+    </div>
+
+    <!-- Seção de Controles do Servidor -->
+    <div class="section">
+        <h2>Controles do Servidor Ativo</h2>
+        <div id="server-ip-section">
+            <strong>IP do Servidor:</strong> 
+            <span id="serverIp">parado</span>
+            <button id="copyIpButton" class="ip-copy-button">Copiar</button>
+        </div>
+        <br>
+        <div id="controls">
+            <button id="startButton" class="control-button">▶ Iniciar</button>
+            <button id="restartButton" class="control-button" disabled>↺ Reiniciar</button>
+            <button id="stopButton" class="control-button" disabled>■ Parar</button>
+        </div>
+        <pre id="terminal">A saída do servidor aparecerá aqui...</pre>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

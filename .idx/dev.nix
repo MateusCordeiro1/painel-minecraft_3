@@ -1,20 +1,35 @@
 { pkgs, ... }:
 {
-  # Which nixpkgs channel to use.
-  channel = "stable-23.11"; # or "unstable"
+  # Adicione pacotes do Nix aqui.
+  # Exemplo: pkgs.go
+  channel = "stable-23.11"; # ou "unstable"
+  packages = [pkgs.nodejs_20 pkgs.nodePackages.npm pkgs.openjdk17];
 
-  # Use https://search.nixos.org/packages to find packages.
-  packages = [ pkgs.nodejs, pkgs.jdk, pkgs.ngrok, pkgs.git ];
-
-  # Sets environment variables in the workspace.
+  # Configurações do ambiente.
   env = {};
 
-  # Search for the starship package in nixpkgs channels.
-  # starship = {
-  #   enable = true;
-  #   # You can override the starship configuration.
-  #   # settings = {
-  #   #   gcloud.disabled = true;
-  #   # };
-  # };
+  # Processos que devem ser iniciados com o ambiente.
+  startup = {
+    # Exemplo: some-server = {
+    #   command = ["some-server" "--port" "8080"];
+    # };
+  };
+
+  # O que exibir ao iniciar.
+  # `preview` abre um navegador para o URL especificado.
+  # `terminal` abre um novo terminal.
+  previews = [
+    {
+      # Exemplo:
+      # port = 8080;
+      # label = "My Awesome App";
+    }
+  ];
+
+  # Define um editor ou extenção padrão para tipos de arquivo.
+  # `vscode.extensions.my-extension` para extensões do VS Code.
+  # `vscode.editors.my-editor` para editores.
+  # Exemplo:
+  # "*.md" = "vscode.editors.vscode-markdown-editor";
+  defs = {};
 }
