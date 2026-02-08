@@ -1,14 +1,34 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="pt-br">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hello World</title>
-  <link href='/style.css' rel='stylesheet'>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel Minecraft</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <h1>Hello, world!</h1>
-  <button onclick="console.log('hello');">Press me</button>
-  <script defer type="text/javascript" src="/main.js"></script>
+    <header>
+        <h1>Painel de Controle Minecraft</h1>
+    </header>
+    <main>
+        <section class="controls">
+            <h2>Criar Novo Servidor</h2>
+            <div class="form-group">
+                <label for="version-select">Escolha a versão do Minecraft:</label>
+                <select id="version-select" name="version">
+                    <option value="">Carregando versões...</option>
+                </select>
+            </div>
+            <button id="create-server-btn">Criar Servidor</button>
+        </section>
+        <section class="server-log">
+            <h2>Log do Servidor</h2>
+            <pre id="log-output">O log do seu servidor aparecerá aqui...</pre>
+        </section>
+    </main>
+    <script src="main.js"></script>
 </body>
 </html>
