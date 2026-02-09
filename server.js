@@ -13,12 +13,15 @@ const server = http.createServer(app);
 const io = socketIo(server);
 
 const PORT = 3000;
-let scriptProcess = null;
+let scriptProcess = null; // This will hold the spawned 'start.sh' process
+let activeServerDir = null; // This will hold the directory of the running server
 const minecraftVersionsUrl = 'https://launchermeta.mojang.com/mc/game/version_manifest.json';
+const playitExecutableName = 'playit-linux-amd64';
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
+// --- Utility Functions ---
 async function getMinecraftVersions() {
     try {
         const response = await axios.get(minecraftVersionsUrl);
@@ -33,7 +36,7 @@ async function getExistingServers() {
     try {
         const entries = await fsp.readdir(__dirname, { withFileTypes: true });
         return entries
-            .filter(dirent => dirent.isDirectory() && !['node_modules', 'public'].includes(dirent.name) && !dirent.name.startsWith('.'))
+            .filter(dirent => dirent.isDirectory() && !['node_modules', 'public', '.git', '.idx'].includes(dirent.name) && !dirent.name.startsWith('.'))
             .map(dirent => dirent.name);
     } catch (error) {
         console.error("Error reading server directories:", error);
@@ -51,31 +54,74 @@ async function sendInitialData(socket) {
     }
 }
 
+// --- Process Management ---
 const stopServerProcess = (callback) => {
-    exec("pkill -f 'java -Xmx' && pkill -f ngrok", (err) => {
-        if (err && !err.message.includes('no process found')) {
-            console.error('Error stopping processes:', err.message);
+    if (!scriptProcess) {
+        console.log('[DIAGNOSTIC] No server process to stop.');
+        if (callback) callback();
+        return;
+    }
+
+    console.log('[DIAGNOSTIC] Attempting to stop server process...');
+    io.emit('terminal-output', `\n--- Parando o servidor... ---\n`);
+    
+    // Kill the spawned script process
+    scriptProcess.kill('SIGKILL');
+
+    // Fallback cleanup for orphaned processes
+    const cleanupCommand = `pkill -f 'java -Xmx'; pkill -f ${playitExecutableName}`;
+    exec(cleanupCommand, (err, stdout, stderr) => {
+        if (err && !err.message.includes('No such process')) {
+            console.error('[DIAGNOSTIC] Error during pkill cleanup:', stderr);
+        } else {
+            console.log('[DIAGNOSTIC] Cleanup pkill command executed.');
         }
-        if (scriptProcess) {
-            scriptProcess.kill('SIGINT');
-            scriptProcess = null;
-        }
-        io.emit('script-stopped');
+
         console.log('Server processes stopped.');
+        scriptProcess = null;
+        activeServerDir = null;
+        io.emit('script-stopped');
         if (callback) callback();
     });
 };
 
-app.get('/ip', async (req, res) => {
-    try {
-        const response = await axios.get('http://127.0.0.1:4040/api/tunnels');
-        const tcpTunnel = response.data.tunnels.find(t => t.proto === 'tcp');
-        res.json({ ip: tcpTunnel ? tcpTunnel.public_url.replace('tcp://', '') : 'buscando...' });
-    } catch (error) {
-        res.status(503).json({ ip: 'indisponível' });
-    }
-});
+const startScriptProcess = (socket, serverDir) => {
+    const fullServerDir = path.join(__dirname, serverDir);
+    const scriptPath = path.join(fullServerDir, 'start.sh');
 
+    if (!fs.existsSync(scriptPath)) {
+        io.emit('terminal-output', `\n--- ERRO: O script 'start.sh' não foi encontrado em '${serverDir}'. ---\n`);
+        return;
+    }
+    
+    console.log(`[DIAGNOSTIC] Starting script: ${scriptPath} in ${fullServerDir}`);
+    
+    activeServerDir = serverDir;
+    scriptProcess = spawn('bash', [scriptPath], { cwd: fullServerDir, stdio: 'pipe' });
+    
+    io.emit('script-started', serverDir);
+
+    scriptProcess.on('error', (err) => {
+        console.error('[DIAGNOSTIC] FAILED TO START PROCESS:', err);
+        io.emit('terminal-output', `\n--- CRITICAL ERROR: Could not start the server process. ---\n`);
+        activeServerDir = null;
+        scriptProcess = null;
+    });
+
+    scriptProcess.stdout.on('data', (data) => io.emit('terminal-output', data.toString()));
+    scriptProcess.stderr.on('data', (data) => io.emit('terminal-output', `STDERR: ${data.toString()}`));
+
+    scriptProcess.on('close', (code) => {
+        console.log(`[DIAGNOSTIC] Process exited with code: ${code}`);
+        io.emit('script-stopped');
+        io.emit('terminal-output', `\n--- Processo do servidor finalizado (código: ${code}) ---\n`);
+        activeServerDir = null;
+        scriptProcess = null;
+    });
+};
+
+
+// --- API Endpoints ---
 app.delete('/delete/:serverName', async (req, res) => {
     const { serverName } = req.params;
     const serverPath = path.join(__dirname, serverName);
@@ -91,6 +137,7 @@ app.delete('/delete/:serverName', async (req, res) => {
     }
 });
 
+// --- Socket.IO Handlers ---
 io.on('connection', (socket) => {
     console.log('Client connected');
     sendInitialData(socket);
@@ -106,6 +153,7 @@ io.on('connection', (socket) => {
             const versions = await getMinecraftVersions();
             const versionMeta = versions.find(v => v.id === versionName);
             if (!versionMeta) throw new Error(`URL da versão para ${versionName} não encontrada.`);
+            
             const metaResponse = await axios.get(versionMeta.url);
             const downloadUrl = metaResponse.data.downloads.server.url;
             if (!downloadUrl) throw new Error('URL de download do servidor não encontrada.');
@@ -123,16 +171,22 @@ io.on('connection', (socket) => {
             await fsp.writeFile(path.join(serverDir, 'eula.txt'), 'eula=true');
 
             socket.emit('creation-status', 'Copiando arquivos de inicialização...');
-            const commonFiles = ['start.sh', 'ngrok'];
-            for (const file of commonFiles) {
+            const filesToCopy = ['start.sh', playitExecutableName];
+
+            for (const file of filesToCopy) {
                 const src = path.join(__dirname, file);
                 const dest = path.join(serverDir, file);
-                await fsp.copyFile(src, dest);
-                await fsp.chmod(dest, '755');
+                try {
+                    await fsp.copyFile(src, dest);
+                    await fsp.chmod(dest, '755');
+                } catch (copyError) {
+                     throw new Error(`Falha ao copiar o arquivo essencial '${file}'. Certifique-se que ele existe no diretório principal.`);
+                }
             }
 
             socket.emit('creation-status', `\nServidor '${serverName}' criado com sucesso!`);
             io.emit('existing-servers', await getExistingServers());
+
         } catch (error) {
             console.error('[CREATE-SERVER] FATAL ERROR:', error);
             socket.emit('creation-status', `\nERRO: ${error.message}`);
@@ -140,68 +194,16 @@ io.on('connection', (socket) => {
         }
     });
     
-    socket.on('start-script', async ({ serverDir }) => {
+    socket.on('start-script', ({ serverDir }) => {
         if (scriptProcess) {
             socket.emit('terminal-output', `\n--- Um servidor já está em execução. Pare-o primeiro. ---\n`);
             return;
         }
-        const fullServerDir = path.join(__dirname, serverDir);
-
-        try {
-            console.log(`[DIAGNOSTIC] Atualizando scripts em ${serverDir}...`);
-            const rootDir = __dirname;
-            const filesToCopy = ['start.sh', 'ngrok'];
-            for (const file of filesToCopy) {
-                const src = path.join(rootDir, file);
-                const dest = path.join(fullServerDir, file);
-                await fsp.copyFile(src, dest);
-                await fsp.chmod(dest, '755');
-            }
-            console.log(`[DIAGNOSTIC] Scripts atualizados com sucesso.`);
-        } catch (error) {
-            console.error(`[DIAGNOSTIC] Falha ao copiar scripts:`, error);
-            socket.emit('terminal-output', `\n--- ERRO: Falha ao atualizar os scripts de inicialização. ---\n`);
+        if (!serverDir) {
+            socket.emit('terminal-output', `\n--- Por favor, selecione um servidor. ---\n`);
             return;
         }
-
-        const scriptPath = path.join(fullServerDir, 'start.sh');
-        console.log(`[DIAGNOSTIC] Tentando parar processos antigos antes de iniciar.`);
-        stopServerProcess(() => {
-            console.log(`[DIAGNOSTIC] Iniciando script: ${scriptPath} em ${fullServerDir}`);
-            
-            scriptProcess = spawn('bash', [scriptPath], { cwd: fullServerDir, stdio: 'pipe' });
-            
-            console.log(`[DIAGNOSTIC] Processo spawnado com PID: ${scriptProcess.pid}`);
-            io.emit('script-started', serverDir);
-
-            scriptProcess.on('error', (err) => {
-                console.error('[DIAGNOSTIC] FALHA AO INICIAR PROCESSO:', err);
-                io.emit('terminal-output', `\n--- ERRO CRÍTICO: Não foi possível iniciar o processo do servidor. Verifique os logs do painel. ---\n`);
-            });
-
-            scriptProcess.stdout.on('data', (data) => {
-                const output = data.toString();
-                console.log(`[DIAGNOSTIC STDOUT]:\n${output}`);
-                io.emit('terminal-output', output);
-            });
-
-            scriptProcess.stderr.on('data', (data) => {
-                const output = `STDERR: ${data.toString()}`;
-                console.error(`[DIAGNOSTIC STDERR]:\n${output}`);
-                io.emit('terminal-output', output);
-            });
-
-            scriptProcess.on('close', (code) => {
-                console.log(`[DIAGNOSTIC] Processo finalizado com código: ${code}`);
-                io.emit('script-stopped');
-                io.emit('terminal-output', `\n--- Processo do servidor finalizado (código: ${code}) ---\n`);
-                scriptProcess = null;
-            });
-
-            scriptProcess.on('exit', (code) => {
-                console.log(`[DIAGNOSTIC] Evento 'exit' do processo com código: ${code}`);
-            });
-        });
+        startScriptProcess(socket, serverDir);
     });
 
     socket.on('stop-script', () => {
@@ -209,8 +211,22 @@ io.on('connection', (socket) => {
              socket.emit('terminal-output', `\n--- Nenhum servidor em execução para parar. ---\n`);
              return;
         }
-        io.emit('terminal-output', `\n--- Parando o servidor... ---\n`);
         stopServerProcess();
+    });
+    
+    socket.on('restart-script', () => {
+        if (!scriptProcess || !activeServerDir) {
+            socket.emit('terminal-output', `\n--- Nenhum servidor em execução para reiniciar. ---\n`);
+            return;
+        }
+        const serverToRestart = activeServerDir;
+        io.emit('terminal-output', `\n--- Reiniciando o servidor '${serverToRestart}'... ---\n`);
+        stopServerProcess(() => {
+            // Short delay to ensure all resources are freed before restarting.
+            setTimeout(() => {
+                startScriptProcess(socket, serverToRestart);
+            }, 1500);
+        });
     });
     
     socket.on('terminal-command', (command) => {
@@ -224,6 +240,7 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => console.log('Client disconnected'));
 });
 
+// --- Server Initialization ---
 server.listen(PORT, () => {
   console.log(`Painel de controle iniciado em http://localhost:${PORT}`);
 });

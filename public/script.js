@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const socket = io({ reconnectionAttempts: 10, reconnectionDelay: 1000 });
 
+    // --- Element Selectors ---
     const startButton = document.getElementById('startButton');
     const stopButton = document.getElementById('stopButton');
     const restartButton = document.getElementById('restartButton');
@@ -16,13 +17,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const commandInput = document.getElementById('commandInput');
     const sendCommandBtn = document.getElementById('sendCommandBtn');
 
+    // --- State Variables ---
     let serverRunning = false;
     let activeServerName = null;
-    let ipCheckInterval = null;
 
+    // --- Core Functions ---
     const updateButtonStates = (isRunning, serverName) => {
         serverRunning = isRunning;
         activeServerName = isRunning ? serverName : null;
+
         startButton.disabled = isRunning;
         stopButton.disabled = !isRunning;
         restartButton.disabled = !isRunning;
@@ -30,41 +33,18 @@ document.addEventListener('DOMContentLoaded', () => {
         serverSelector.disabled = isRunning;
         commandInput.disabled = !isRunning;
         sendCommandBtn.disabled = !isRunning;
+        createServerForm.querySelector('button').disabled = isRunning;
+
         if (isRunning) {
             startButton.textContent = `Rodando: ${serverName}`;
-            startIpPolling();
+            serverIpElement.textContent = 'Aguarde, o IP aparecerá em breve...';
         } else {
             startButton.textContent = '▶ Iniciar';
             serverIpElement.textContent = 'parado';
-            stopIpPolling();
         }
     };
 
     const getSelectedServer = () => serverSelector.value;
-
-    const fetchServerIp = async () => {
-        if (!serverRunning) return;
-        try {
-            const response = await fetch('/ip');
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            const data = await response.json();
-            serverIpElement.textContent = data.ip || 'buscando...';
-        } catch (error) {
-            serverIpElement.textContent = 'erro ao buscar';
-            console.error('Error fetching IP:', error);
-        }
-    };
-
-    const startIpPolling = () => {
-        stopIpPolling();
-        fetchServerIp();
-        ipCheckInterval = setInterval(fetchServerIp, 7000);
-    };
-
-    const stopIpPolling = () => {
-        clearInterval(ipCheckInterval);
-        ipCheckInterval = null;
-    };
 
     const sendCommand = () => {
         const command = commandInput.value.trim();
@@ -77,17 +57,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const clearTerminal = (text = 'A saída do servidor aparecerá aqui...') => {
         terminal.textContent = text;
     };
-    
+
     const clearCreationStatus = (text = 'O status da criação aparecerá aqui.') => {
         creationStatus.textContent = text;
     }
 
+    // --- Event Listeners ---
     createServerForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const serverName = serverNameInput.value.trim();
         const versionName = versionSelector.value;
+
         if (!serverName || !versionName) {
             alert('Por favor, selecione uma versão e digite um nome para o servidor.');
+            return;
+        }
+        if (serverRunning) {
+            alert('Pare o servidor atual antes de criar um novo.');
             return;
         }
         clearCreationStatus(`Iniciando criação do servidor '${serverName}' com a versão '${versionName}'...`);
@@ -110,16 +96,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!serverRunning) return;
         socket.emit('stop-script');
     });
-    
+
     restartButton.addEventListener('click', () => {
-        if(!serverRunning) return;
-        clearTerminal(`Enviando comando para reiniciar o servidor '${activeServerName}'...`);
-        socket.emit('stop-script');
-        setTimeout(() => {
-            if (!serverRunning) {
-                socket.emit('start-script', { serverDir: activeServerName });
-            }
-        }, 4000);
+        if (!serverRunning) return;
+        socket.emit('restart-script');
     });
 
     deleteServerBtn.addEventListener('click', async () => {
@@ -149,16 +129,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     copyIpButton.addEventListener('click', () => {
         const ip = serverIpElement.textContent;
-        if (ip && !['parado', 'buscando...', 'erro ao buscar', 'indisponível'].includes(ip)) {
+        if (ip && ip !== 'parado' && ip !== 'Aguarde, o IP aparecerá em breve...') {
             navigator.clipboard.writeText(ip)
                 .then(() => alert(`IP "${ip}" copiado!`))
                 .catch(err => console.error('Falha ao copiar o IP:', err));
         }
     });
-    
+
     sendCommandBtn.addEventListener('click', sendCommand);
     commandInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendCommand(); });
 
+    // --- Socket.IO Handlers ---
     socket.on('connect', () => {
         console.log('Conectado ao backend!');
         socket.emit('get-initial-data');
@@ -188,6 +169,7 @@ document.addEventListener('DOMContentLoaded', () => {
             option.textContent = s;
             serverSelector.appendChild(option);
         });
+        // Restore selection if possible
         if (servers.includes(currentServer)) {
             serverSelector.value = currentServer;
         } else {
@@ -196,7 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     socket.on('creation-status', (data) => {
-        if(creationStatus.textContent.startsWith('O status da criação aparecerá aqui')){
+        if (creationStatus.textContent.startsWith('O status da criação aparecerá aqui')) {
             creationStatus.textContent = '';
         }
         creationStatus.textContent += `${data}\n`;
@@ -204,7 +186,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     socket.on('terminal-output', (data) => {
-        if (terminal.textContent.startsWith('A saída do servidor aparecerá aqui...') || terminal.textContent.startsWith('Enviando comando para iniciar')) {
+        const playitUrlMatch = data.match(/(https?:\/\/[-a-zA-Z0-9.]*\.playit\.gg)/);
+        if (playitUrlMatch) {
+            const url = new URL(playitUrlMatch[0]);
+            serverIpElement.textContent = url.hostname;
+        }
+
+        if (terminal.textContent.startsWith('A saída do servidor aparecerá aqui...') || terminal.textContent.startsWith('Enviando comando para')) {
             terminal.textContent = '';
         }
         terminal.textContent += data;
@@ -212,15 +200,20 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     socket.on('script-started', (serverName) => {
+        console.log('Script started event for:', serverName);
         updateButtonStates(true, serverName);
+        // Set the selector to the running server
+        serverSelector.value = serverName;
         clearCreationStatus();
     });
 
     socket.on('script-stopped', () => {
+        console.log('Script stopped event');
         updateButtonStates(false, null);
         terminal.textContent += `\n\n--- SERVIDOR PARADO. ---`;
     });
 
+    // --- Initial State ---
     updateButtonStates(false, null);
     clearTerminal();
     clearCreationStatus();

@@ -1,0 +1,16 @@
+[12:03:58] [ServerMain/WARN]: Did not find udev library in operating system. Some features may not work.
+[12:04:10] [ServerMain/INFO]: Environment: Environment[sessionHost=https://sessionserver.mojang.com, servicesHost=https://api.minecraftservices.com, profilesHost=https://api.mojang.com, name=PROD]
+[12:04:18] [ServerMain/INFO]: Loaded 1470 recipes
+[12:04:19] [ServerMain/INFO]: Loaded 1584 advancements
+[12:04:19] [Server thread/INFO]: Starting minecraft server version 1.21.11
+[12:04:19] [Server thread/INFO]: Loading properties
+[12:04:19] [Server thread/INFO]: Default game type: SURVIVAL
+[12:04:19] [Server thread/INFO]: Generating keypair
+[12:04:19] [Server thread/INFO]: Starting Minecraft server on *:25565
+[12:04:20] [Server thread/INFO]: Preparing level "world"
+[12:04:21] [Server thread/INFO]: Loading 0 persistent chunks...
+[12:04:21] [Server thread/INFO]: Preparing spawn area: 100%
+[12:04:21] [Server thread/INFO]: Time elapsed: 20 ms
+[12:04:21] [Server thread/INFO]: Done (0.878s)! For help, type "help"
+[12:05:21] [Server thread/INFO]: Server empty for 60 seconds, pausing
+[12:07:51] [Server thread/INFO]: Stopping server
