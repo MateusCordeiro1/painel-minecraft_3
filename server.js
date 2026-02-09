@@ -3,9 +3,10 @@ const http = require('http');
 const socketIo = require('socket.io');
 const { spawn, exec } = require('child_process');
 const path = require('path');
-const fs = require('fs').promises;
+const fs = require('fs');
+const fsp = require('fs').promises;
 const axios = require('axios');
-const { rimraf } = require('rimraf'); // Importação corrigida
+const { rimraf } = require('rimraf');
 
 const app = express();
 const server = http.createServer(app);
@@ -15,17 +16,13 @@ const PORT = 3000;
 let scriptProcess = null;
 const minecraftVersionsUrl = 'https://launchermeta.mojang.com/mc/game/version_manifest.json';
 
-// Middlewares
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
-
-// --- Funções Auxiliares ---
 
 async function getMinecraftVersions() {
     try {
         const response = await axios.get(minecraftVersionsUrl);
-        const releases = response.data.versions.filter(v => v.type === 'release').slice(0, 50);
-        return releases;
+        return response.data.versions.filter(v => v.type === 'release').slice(0, 50);
     } catch (error) {
         console.error('Error fetching Minecraft versions:', error);
         return [];
@@ -34,11 +31,10 @@ async function getMinecraftVersions() {
 
 async function getExistingServers() {
     try {
-        const entries = await fs.readdir(__dirname, { withFileTypes: true });
-        const serverDirs = entries
-            .filter(dirent => dirent.isDirectory() && dirent.name !== 'node_modules' && !dirent.name.startsWith('.') && dirent.name !== 'public')
+        const entries = await fsp.readdir(__dirname, { withFileTypes: true });
+        return entries
+            .filter(dirent => dirent.isDirectory() && !['node_modules', 'public'].includes(dirent.name) && !dirent.name.startsWith('.'))
             .map(dirent => dirent.name);
-        return serverDirs;
     } catch (error) {
         console.error("Error reading server directories:", error);
         return [];
@@ -46,76 +42,55 @@ async function getExistingServers() {
 }
 
 async function sendInitialData(socket) {
-    const versions = await getMinecraftVersions();
-    const servers = await getExistingServers();
-    socket.emit('minecraft-versions', versions);
-    socket.emit('existing-servers', servers);
+    try {
+        const [versions, servers] = await Promise.all([getMinecraftVersions(), getExistingServers()]);
+        socket.emit('minecraft-versions', versions);
+        socket.emit('existing-servers', servers);
+    } catch (error) {
+        console.error("Error sending initial data:", error);
+    }
 }
 
 const stopServerProcess = (callback) => {
-    exec("pkill -f 'java -Xmx' && pkill -f 'ngrok tcp'", (err) => {
-        if (err) console.error('Error stopping processes:', err.message);
+    exec("pkill -f 'java -Xmx' && pkill -f ngrok", (err) => {
+        if (err && !err.message.includes('no process found')) {
+            console.error('Error stopping processes:', err.message);
+        }
         if (scriptProcess) {
             scriptProcess.kill('SIGINT');
             scriptProcess = null;
         }
         io.emit('script-stopped');
+        console.log('Server processes stopped.');
         if (callback) callback();
     });
 };
 
-// --- ROTAS DA API ---
-
 app.get('/ip', async (req, res) => {
     try {
         const response = await axios.get('http://127.0.0.1:4040/api/tunnels');
-        const tunnels = response.data.tunnels;
-        const tcpTunnel = tunnels.find(t => t.proto === 'tcp');
-
-        if (tcpTunnel) {
-            const ip = tcpTunnel.public_url.replace('tcp://', '');
-            res.json({ ip });
-        } else {
-            res.status(404).json({ ip: 'Não disponível (túnel não encontrado)' });
-        }
+        const tcpTunnel = response.data.tunnels.find(t => t.proto === 'tcp');
+        res.json({ ip: tcpTunnel ? tcpTunnel.public_url.replace('tcp://', '') : 'buscando...' });
     } catch (error) {
-        res.status(503).json({ ip: 'Indisponível (verifique se o servidor está online)' });
+        res.status(503).json({ ip: 'indisponível' });
     }
 });
 
-// Rota de delete corrigida
 app.delete('/delete/:serverName', async (req, res) => {
     const { serverName } = req.params;
-    if (!serverName || serverName.startsWith('.') || serverName === 'node_modules' || serverName === 'public') {
+    const serverPath = path.join(__dirname, serverName);
+    if (!serverName || serverName.includes('..') || serverName.includes('/')) {
         return res.status(400).json({ success: false, message: 'Nome de servidor inválido.' });
     }
-
-    const serverPath = path.join(__dirname, serverName);
-    console.log(`Tentando deletar o servidor: ${serverName}`);
-
     try {
-        // Garante que os processos sejam parados antes de deletar
-        await new Promise(resolve => stopServerProcess(resolve));
-        console.log(`Processos parados. Deletando a pasta: ${serverPath}`);
-        
-        // Deleta a pasta do servidor de forma segura com await
         await rimraf(serverPath);
-        console.log(`Pasta ${serverPath} deletada.`);
-
-        // Atualiza a lista de servidores para todos os clientes
-        const servers = await getExistingServers();
-        io.emit('existing-servers', servers);
-
-        res.json({ success: true, message: `Servidor '${serverName}' deletado com sucesso.` });
-
+        io.emit('existing-servers', await getExistingServers());
+        res.json({ success: true, message: `Servidor '${serverName}' deletado.` });
     } catch (error) {
-        console.error(`Erro ao deletar a pasta ${serverPath}:`, error);
         res.status(500).json({ success: false, message: 'Erro ao deletar a pasta do servidor.' });
     }
 });
 
-
-// --- Lógica do Socket.IO ---
 io.on('connection', (socket) => {
     console.log('Client connected');
     sendInitialData(socket);
@@ -126,20 +101,18 @@ io.on('connection', (socket) => {
         const serverDir = path.join(__dirname, serverName);
         try {
             socket.emit('creation-status', `Criando diretório: ${serverName}`);
-            await fs.mkdir(serverDir, { recursive: true });
+            await fsp.mkdir(serverDir, { recursive: true });
 
-            socket.emit('creation-status', 'Buscando URL de download...');
-            const versionMetaUrl = (await getMinecraftVersions()).find(v => v.id === versionName)?.url;
-            if (!versionMetaUrl) throw new Error('Versão não encontrada!');
-            
-            const metaResponse = await axios.get(versionMetaUrl);
+            const versions = await getMinecraftVersions();
+            const versionMeta = versions.find(v => v.id === versionName);
+            if (!versionMeta) throw new Error(`URL da versão para ${versionName} não encontrada.`);
+            const metaResponse = await axios.get(versionMeta.url);
             const downloadUrl = metaResponse.data.downloads.server.url;
+            if (!downloadUrl) throw new Error('URL de download do servidor não encontrada.');
 
             socket.emit('creation-status', `Baixando server.jar (versão ${versionName})...`);
             const jarResponse = await axios({ url: downloadUrl, responseType: 'stream' });
-            
-            const jarPath = path.join(serverDir, 'server.jar');
-            const writer = require('fs').createWriteStream(jarPath);
+            const writer = fs.createWriteStream(path.join(serverDir, 'server.jar'));
             jarResponse.data.pipe(writer);
             await new Promise((resolve, reject) => {
                 writer.on('finish', resolve);
@@ -147,62 +120,110 @@ io.on('connection', (socket) => {
             });
 
             socket.emit('creation-status', 'Download completo. Aceitando EULA...');
-            const eulaPath = path.join(serverDir, 'eula.txt');
-            await fs.writeFile(eulaPath, 'eula=true');
-            
-            socket.emit('creation-status', 'Copiando script de inicialização...');
-            const startScriptPath = path.join(__dirname, 'start.sh');
-            const destScriptPath = path.join(serverDir, 'start.sh');
-            await fs.copyFile(startScriptPath, destScriptPath);
-            await fs.chmod(destScriptPath, '755');
+            await fsp.writeFile(path.join(serverDir, 'eula.txt'), 'eula=true');
+
+            socket.emit('creation-status', 'Copiando arquivos de inicialização...');
+            const commonFiles = ['start.sh', 'ngrok'];
+            for (const file of commonFiles) {
+                const src = path.join(__dirname, file);
+                const dest = path.join(serverDir, file);
+                await fsp.copyFile(src, dest);
+                await fsp.chmod(dest, '755');
+            }
 
             socket.emit('creation-status', `\nServidor '${serverName}' criado com sucesso!`);
-            socket.emit('creation-status', 'Você já pode selecioná-lo na lista e iniciar.');
-
-            const servers = await getExistingServers();
-            io.emit('existing-servers', servers);
-
+            io.emit('existing-servers', await getExistingServers());
         } catch (error) {
-            console.error('Error creating server:', error);
+            console.error('[CREATE-SERVER] FATAL ERROR:', error);
             socket.emit('creation-status', `\nERRO: ${error.message}`);
+            try { await rimraf(serverDir); } catch (e) { console.error('Cleanup failed:', e); }
         }
     });
     
-    socket.on('start-script', ({ serverDir }) => {
+    socket.on('start-script', async ({ serverDir }) => {
         if (scriptProcess) {
-            socket.emit('terminal-output', 'Um servidor já está em execução.\n');
+            socket.emit('terminal-output', `\n--- Um servidor já está em execução. Pare-o primeiro. ---\n`);
             return;
         }
-        const scriptPath = path.join(__dirname, serverDir, 'start.sh');
         const fullServerDir = path.join(__dirname, serverDir);
 
-        fs.access(fullServerDir)
-            .then(() => {
-                scriptProcess = spawn('bash', [scriptPath], { cwd: fullServerDir });
-                io.emit('script-started', serverDir);
+        try {
+            console.log(`[DIAGNOSTIC] Atualizando scripts em ${serverDir}...`);
+            const rootDir = __dirname;
+            const filesToCopy = ['start.sh', 'ngrok'];
+            for (const file of filesToCopy) {
+                const src = path.join(rootDir, file);
+                const dest = path.join(fullServerDir, file);
+                await fsp.copyFile(src, dest);
+                await fsp.chmod(dest, '755');
+            }
+            console.log(`[DIAGNOSTIC] Scripts atualizados com sucesso.`);
+        } catch (error) {
+            console.error(`[DIAGNOSTIC] Falha ao copiar scripts:`, error);
+            socket.emit('terminal-output', `\n--- ERRO: Falha ao atualizar os scripts de inicialização. ---\n`);
+            return;
+        }
 
-                scriptProcess.stdout.on('data', (data) => io.emit('terminal-output', data.toString()));
-                scriptProcess.stderr.on('data', (data) => io.emit('terminal-output', `ERROR: ${data.toString()}`));
-                scriptProcess.on('close', (code) => {
-                    io.emit('terminal-output', `\n--- Script finalizado (código: ${code}) ---\n`);
-                    scriptProcess = null;
-                    io.emit('script-stopped');
-                });
-            })
-            .catch(err => {
-                 socket.emit('terminal-output', `ERRO: O diretório do servidor '${serverDir}' não foi encontrado.\n`);
+        const scriptPath = path.join(fullServerDir, 'start.sh');
+        console.log(`[DIAGNOSTIC] Tentando parar processos antigos antes de iniciar.`);
+        stopServerProcess(() => {
+            console.log(`[DIAGNOSTIC] Iniciando script: ${scriptPath} em ${fullServerDir}`);
+            
+            scriptProcess = spawn('bash', [scriptPath], { cwd: fullServerDir, stdio: 'pipe' });
+            
+            console.log(`[DIAGNOSTIC] Processo spawnado com PID: ${scriptProcess.pid}`);
+            io.emit('script-started', serverDir);
+
+            scriptProcess.on('error', (err) => {
+                console.error('[DIAGNOSTIC] FALHA AO INICIAR PROCESSO:', err);
+                io.emit('terminal-output', `\n--- ERRO CRÍTICO: Não foi possível iniciar o processo do servidor. Verifique os logs do painel. ---\n`);
             });
+
+            scriptProcess.stdout.on('data', (data) => {
+                const output = data.toString();
+                console.log(`[DIAGNOSTIC STDOUT]:\n${output}`);
+                io.emit('terminal-output', output);
+            });
+
+            scriptProcess.stderr.on('data', (data) => {
+                const output = `STDERR: ${data.toString()}`;
+                console.error(`[DIAGNOSTIC STDERR]:\n${output}`);
+                io.emit('terminal-output', output);
+            });
+
+            scriptProcess.on('close', (code) => {
+                console.log(`[DIAGNOSTIC] Processo finalizado com código: ${code}`);
+                io.emit('script-stopped');
+                io.emit('terminal-output', `\n--- Processo do servidor finalizado (código: ${code}) ---\n`);
+                scriptProcess = null;
+            });
+
+            scriptProcess.on('exit', (code) => {
+                console.log(`[DIAGNOSTIC] Evento 'exit' do processo com código: ${code}`);
+            });
+        });
     });
 
     socket.on('stop-script', () => {
-        io.emit('terminal-output', '\n--- Parando todos os processos (Java e Ngrok)... ---\n');
+        if (!scriptProcess) {
+             socket.emit('terminal-output', `\n--- Nenhum servidor em execução para parar. ---\n`);
+             return;
+        }
+        io.emit('terminal-output', `\n--- Parando o servidor... ---\n`);
         stopServerProcess();
+    });
+    
+    socket.on('terminal-command', (command) => {
+        if (scriptProcess && scriptProcess.stdin) {
+            scriptProcess.stdin.write(command + "\n");
+        } else {
+            socket.emit('terminal-output', `\n--- Nenhum servidor em execução para enviar o comando. ---\n`);
+        }
     });
 
     socket.on('disconnect', () => console.log('Client disconnected'));
 });
 
 server.listen(PORT, () => {
-  console.log(`Painel de controle iniciado na porta ${PORT}`);
-  console.log(`Acesse em: http://localhost:${PORT}`);
+  console.log(`Painel de controle iniciado em http://localhost:${PORT}`);
 });

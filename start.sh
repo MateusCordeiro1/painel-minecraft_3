@@ -1,33 +1,29 @@
 #!/bin/bash
 
-# O diretório de trabalho já é definido pelo server.js, então o script já está no lugar certo.
+echo "--- Iniciando script start.sh com Nix ---"
 
-# Define o caminho absoluto para o diretório raiz do projeto (um nível acima do CWD)
-PROJECT_ROOT="$(dirname "$PWD")"
+# Defina a porta e a quantidade de memória aqui
+MINECRAFT_PORT=25565
+MEMORY="5G"
+NGROK_LOG="ngrok.log"
 
-# NOTA DE SEGURANÇA: A linha de configuração do token do ngrok foi removida.
-# Você deve configurar seu token manualmente na sua máquina UMA VEZ com o comando:
-# ./ngrok config add-authtoken SEU_TOKEN_AQUI
+echo "Autenticando Ngrok..."
+./ngrok authtoken $NGROK_AUTH_TOKEN --log=stdout > $NGROK_LOG 2>&1
 
-# Verifica se o ngrok já está rodando
-if pgrep -x "ngrok" > /dev/null
-then
-    echo "Ngrok já está em execução. Pulando inicialização do túnel."
-else
-    echo "Iniciando túnel ngrok..."
-    # Usa o caminho absoluto para o ngrok para evitar problemas com espaços
-    "$PROJECT_ROOT/ngrok" tcp --region sa 25565 &
-    sleep 4 
-fi
+echo "Iniciando túnel TCP do Ngrok na porta $MINECRAFT_PORT..."
+./ngrok tcp $MINECRAFT_PORT --log=stdout > $NGROK_LOG 2>&1 &
 
-# Inicia o servidor Minecraft
-if [ -f "server.jar" ]; then
-    echo "Iniciando servidor Minecraft..."
-    # Usa nix-shell para garantir o Java, aloca 5GB de RAM,
-    # usa nohup para rodar em segundo plano de forma segura (&)
-    # e salva a saída em server.log.
-    nohup nix-shell -p pkgs.jdk21 --run "java -Xmx5G -jar server.jar nogui" > server.log 2>&1 &
-    echo "Servidor iniciado em segundo plano. Logs disponíveis em server.log."
-else
-    echo "ERRO: server.jar não encontrado!"
-fi
+echo "Aguardando Ngrok iniciar..."
+sleep 8
+
+echo "Verificando status do Ngrok (últimas 5 linhas de $NGROK_LOG):"
+tail -n 5 $NGROK_LOG
+
+echo "--- Iniciando Servidor Minecraft com Nix ---"
+echo "Memória: $MEMORY"
+
+# Executa o servidor Minecraft em primeiro plano usando o nix-shell para garantir o JDK 21.
+# A saída será capturada pelo Node.js e exibida no terminal do painel.
+nix-shell -p pkgs.jdk21 --run "java -Xmx$MEMORY -Xms$MEMORY -jar server.jar nogui"
+
+echo "--- Script start.sh finalizado ---" # Isso só será exibido se o servidor parar
